@@ -1,4 +1,7 @@
-import { describe, it, expect } from "vitest";
+// @vitest-environment jsdom
+import React from "react";
+import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
 import {
   canConcludeAndRefundEscrow,
   isClearingPeriodExpired,
@@ -7,6 +10,7 @@ import {
   applyRefundConcludedState,
   type EscrowRefundCampaign,
 } from "../lib/escrowRefund";
+import { ConcludeRefundModal } from "../components/advertiser/ConcludeRefundModal";
 import { initialMockCampaigns } from "../components/advertiser/MyCampaignsList";
 import { refundEscrowContractCall } from "../lib/stellar";
 import { STORMSALE_CONTRACT_METHODS } from "../config/abis";
@@ -59,11 +63,38 @@ describe("[Advertiser] Campaign Budget Clawback and Time-Locked Escrow Refund Fl
       expect(validation.reason).toContain("Clearing period is still active");
     });
 
-    it("checks isClearingPeriodExpired directly with timestamps", () => {
+    it("checks isClearingPeriodExpired directly with timestamps, ISO strings, and Dates", () => {
       const now = Date.now();
       expect(isClearingPeriodExpired(now - 1000, now)).toBe(true);
       expect(isClearingPeriodExpired(now + 1000, now)).toBe(false);
+      expect(isClearingPeriodExpired(new Date(now - 2000).toISOString(), now)).toBe(true);
+      expect(isClearingPeriodExpired(new Date(now + 2000), now)).toBe(false);
       expect(isClearingPeriodExpired(undefined, now)).toBe(true);
+    });
+
+    it("disallows refund when refundable balance is zero or negative", () => {
+      const emptyCampaign: EscrowRefundCampaign = {
+        ...baseCampaign,
+        escrowBalance: 0,
+      };
+      const validation = canConcludeAndRefundEscrow(emptyCampaign);
+      expect(validation.canRefund).toBe(false);
+      expect(validation.refundableAmount).toBe(0);
+      expect(validation.reason).toContain("No remaining escrow balance to refund");
+    });
+
+    it("handles string or Date clearingExpiresAt in canConcludeAndRefundEscrow", () => {
+      const isoCampaign: EscrowRefundCampaign = {
+        ...baseCampaign,
+        clearingExpiresAt: new Date(Date.now() - 5000).toISOString(),
+      };
+      expect(canConcludeAndRefundEscrow(isoCampaign).canRefund).toBe(true);
+
+      const noExpiryCampaign: EscrowRefundCampaign = {
+        ...baseCampaign,
+        clearingExpiresAt: undefined,
+      };
+      expect(canConcludeAndRefundEscrow(noExpiryCampaign).canRefund).toBe(true);
     });
   });
 
@@ -90,10 +121,86 @@ describe("[Advertiser] Campaign Budget Clawback and Time-Locked Escrow Refund Fl
     });
 
     it("verifies hasClearedAllClaims logic", () => {
+      expect(hasClearedAllClaims()).toBe(true);
       expect(hasClearedAllClaims(0, 0)).toBe(true);
       expect(hasClearedAllClaims(1, 0)).toBe(false);
       expect(hasClearedAllClaims(0, 50)).toBe(false);
       expect(hasClearedAllClaims(2, 100)).toBe(false);
+    });
+
+    it("renders ConcludeRefundModal with exact refundable XLM and zero liabilities", () => {
+      const onClose = vi.fn();
+      const onConfirm = vi.fn().mockResolvedValue(undefined);
+
+      const { rerender } = render(
+        React.createElement(ConcludeRefundModal, {
+          isOpen: true,
+          onClose,
+          campaign: null,
+          treasuryAddress: null,
+          onConfirm,
+        }),
+      );
+      expect(screen.queryByText("Conclude & Refund Escrow")).toBeNull();
+
+      rerender(
+        React.createElement(ConcludeRefundModal, {
+          isOpen: true,
+          onClose,
+          campaign: baseCampaign,
+          treasuryAddress: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+          onConfirm,
+        }),
+      );
+
+      expect(screen.getByText("Conclude & Refund Escrow")).toBeTruthy();
+      expect(screen.getByText("Zero Outstanding Liabilities")).toBeTruthy();
+      expect(screen.getByText("0.00 XLM (0 pending)")).toBeTruthy();
+      expect(screen.getByText("Expired / Concluded")).toBeTruthy();
+
+      const confirmBtn = screen.getByRole("button", { name: /Confirm & Refund/i });
+      fireEvent.click(confirmBtn);
+      expect(onConfirm).toHaveBeenCalledWith(baseCampaign);
+
+      const cancelBtn = screen.getByRole("button", { name: /Cancel/i });
+      fireEvent.click(cancelBtn);
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it("renders ConcludeRefundModal in ineligible and submitting states", () => {
+      const blockedCampaign: EscrowRefundCampaign = {
+        ...baseCampaign,
+        clearingExpiresAt: Date.now() + 120000,
+        pendingClaims: 2,
+        outstandingLiabilities: 200,
+      };
+
+      const { rerender } = render(
+        React.createElement(ConcludeRefundModal, {
+          isOpen: true,
+          onClose: vi.fn(),
+          campaign: blockedCampaign,
+          treasuryAddress: null,
+          onConfirm: vi.fn(),
+          isSubmitting: false,
+        }),
+      );
+
+      expect(screen.getByText("Advertiser Signer")).toBeTruthy();
+      expect(screen.getByText("200.00 XLM (2 pending)")).toBeTruthy();
+
+      rerender(
+        React.createElement(ConcludeRefundModal, {
+          isOpen: true,
+          onClose: vi.fn(),
+          campaign: baseCampaign,
+          treasuryAddress: null,
+          onConfirm: vi.fn(),
+          isSubmitting: true,
+        }),
+      );
+
+      expect(screen.getByText(/Submitting Contract Refund/i)).toBeTruthy();
     });
   });
 
@@ -128,10 +235,10 @@ describe("[Advertiser] Campaign Budget Clawback and Time-Locked Escrow Refund Fl
       expect(validation.refundableAmount).toBe(1200);
     });
 
-    it("identifies Campaign 6 as ineligible due to unexpired clearing period and pending claims", () => {
-      const campaign6 = initialMockCampaigns.find((c) => c.id === "6");
-      expect(campaign6).toBeDefined();
-      const validation = canConcludeAndRefundEscrow(campaign6!);
+    it("identifies Campaign 7 as ineligible due to unexpired clearing period and pending claims", () => {
+      const campaign7 = initialMockCampaigns.find((c) => c.id === "7");
+      expect(campaign7).toBeDefined();
+      const validation = canConcludeAndRefundEscrow(campaign7!);
       expect(validation.canRefund).toBe(false);
       expect(validation.isClearingExpired).toBe(false);
       expect(validation.hasClearedAllClaims).toBe(false);
