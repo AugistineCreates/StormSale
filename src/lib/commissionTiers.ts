@@ -168,22 +168,12 @@ export function mapScValToTier(scVal: xdr.ScVal, index: number = 0): CommissionT
  * Decodes an on-chain Soroban ScVal Vec back into an array of CommissionTiers.
  */
 export function mapScValVecToTiers(scValVec: xdr.ScVal): CommissionTier[] {
-  const isVec =
-    (scValVec as any).type === "scvVec" ||
-    (typeof (scValVec as any).switch === "function" &&
-      (scValVec as any).switch() === xdr.ScValType.scvVec());
-
-  if (!isVec) {
+  const raw = scValVec as unknown as { type?: string; vec?: xdr.ScVal[] | (() => xdr.ScVal[]) };
+  if (raw.type !== "scvVec") {
     return [];
   }
 
-  const vec =
-    (scValVec as any).vec !== undefined
-      ? typeof (scValVec as any).vec === "function"
-        ? (scValVec as any).vec()
-        : (scValVec as any).vec
-      : [];
-
+  const vec = typeof raw.vec === "function" ? raw.vec() : raw.vec;
   if (!Array.isArray(vec)) return [];
 
   return vec.map((entry: xdr.ScVal, idx: number) => mapScValToTier(entry, idx));
