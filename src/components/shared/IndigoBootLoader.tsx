@@ -58,29 +58,30 @@ export const IndigoBootLoader: React.FC<IndigoBootLoaderProps> = ({
     const stepInterval = 30;
     const totalSteps = totalDuration / stepInterval;
     const progressIncrement = 100 / totalSteps;
+    let currentProgress = 0;
 
     const interval = setInterval(() => {
-      setProgress((prev) => {
-        const next = Math.min(prev + progressIncrement, 100);
+      currentProgress = Math.min(currentProgress + progressIncrement, 100);
+      const next = currentProgress;
 
-        if (next < 30) {
-          setStageIndex(0);
-        } else if (next < 65) {
-          setStageIndex(1);
-        } else if (next < 95) {
-          setStageIndex(2);
-        } else {
-          setStageIndex(3);
-        }
+      setProgress(next);
 
-        if (next >= 100) {
-          clearInterval(interval);
-          setTimeout(() => {
-            onComplete?.();
-          }, 180);
-        }
-        return next;
-      });
+      if (next < 30) {
+        setStageIndex(0);
+      } else if (next < 65) {
+        setStageIndex(1);
+      } else if (next < 95) {
+        setStageIndex(2);
+      } else {
+        setStageIndex(3);
+      }
+
+      if (next >= 100) {
+        clearInterval(interval);
+        setTimeout(() => {
+          onComplete?.();
+        }, 180);
+      }
     }, stepInterval);
 
     return () => clearInterval(interval);
